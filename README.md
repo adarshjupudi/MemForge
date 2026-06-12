@@ -1,134 +1,413 @@
-```markdown
 # MemForge: High-Performance Hybrid Memory Management Engine
 
-MemForge is a production-grade, low-overhead, user-space memory management engine implemented in C++17. By completely bypassing the general-purpose OS heap manager (`malloc`/`new`) during runtime execution, MemForge provides specialized allocation structures designed for ultra-low latency scenarios such as game engines, high-frequency trading (HFT) platforms, and real-time systems.
+MemForge is a production-grade, low-overhead, user-space memory management engine implemented in **C++17**.
 
-In performance stress testing over **50,000 continuous allocation cycles**, MemForge outperformed the standard C++ heap allocator by **5.22x**, reducing latency down to a fraction of a millisecond with a mathematically verified **0% memory leak footprint**.
+By completely bypassing the general-purpose OS heap manager (`malloc` / `new`) during runtime execution, MemForge provides specialized allocation structures designed for ultra-low latency systems such as:
+
+* Game Engines
+* High-Frequency Trading (HFT) Platforms
+* Real-Time Simulation Systems
+* Performance-Critical Backend Infrastructure
+
+In performance stress testing over **50,000 continuous allocation cycles**, MemForge achieved **5.22× faster execution** than the standard C++ heap allocator while maintaining a mathematically verified **0% memory leak footprint**.
 
 ---
 
-## 🚀 Performance Benchmarks
+# 🚀 Performance Benchmarks
 
-The engine contains an integrated high-precision `<chrono>` micro-benchmark suite executing a high-stress simulation of **50,000 sequential object creations and destructions** (using a `GameEntity` structure representing a 144-byte architectural object).
+The engine contains an integrated high-precision `<chrono>` micro-benchmark suite that executes a high-stress simulation of **50,000 sequential object allocations and deallocations** using a 144-byte `GameEntity` structure.
+
+## Benchmark Output
 
 ```text
 ========================================
-      MEMFORGE MICRO-BENCHMARK SUITE    
+      MEMFORGE MICRO-BENCHMARK SUITE
 ========================================
 
 [Running Benchmark 1/2: Standard C++ Heap...]
 [Running Benchmark 2/2: MemForge Engine...]
 
 ========================================
-           PERFORMANCE SUMMARY          
+           PERFORMANCE SUMMARY
 ========================================
- Standard Heap Time : 15757 us
- MemForge Engine Time: 3017 us
- Result              : MemForge is 5.22274x FASTER!
+
+Standard Heap Time  : 15757 us
+MemForge Time       : 3017 us
+
+Result              : MemForge is 5.22274x FASTER!
+
 ========================================
 
 ========================================
-       MEMFORGE SYSTEM TELEMETRY        
-========================================
- Active Allocations : 0
- Current Memory Use : 7200000 bytes
- Peak Memory Use    : 7200000 bytes (High-Water Mark)
- STATUS             : Clean. Zero leaks detected.
+       MEMFORGE SYSTEM TELEMETRY
 ========================================
 
+Active Allocations : 0
+Current Memory Use : 7200000 bytes
+Peak Memory Use    : 7200000 bytes
+STATUS             : Clean. Zero leaks detected.
+
+========================================
 ```
 
-### 📊 Performance Insights
+---
 
-1. **Zero Kernel Crossings:** General-purpose heaps context-switch into kernel space (`brk`/`mmap`) when physical pages run low. MemForge crosses the kernel boundary **exactly once** at initialization. All subsequent operations execute entirely in user space.
-2. **Deterministic $O(1)$ Mechanics:** Standard library tools search complex fragmentation tracking tables (e.g., bin trees/red-black trees) to fulfill arbitrary sizing hooks. MemForge uses automated range-demultiplexing and embedded pointer tracking to bypass list traversals entirely.
-3. **Cache Optimization:** By leveraging **Temporal Locality** inside specialized recycling lists, recently freed blocks stay primed inside the CPU's L1/L2 data caches, minimizing expensive main RAM refresh delays.
+# 📊 Performance Analysis
+
+## Zero Kernel Crossings
+
+Traditional heap allocators eventually request additional pages from the operating system through mechanisms such as:
+
+* `brk()`
+* `sbrk()`
+* `mmap()`
+
+MemForge performs a single bulk allocation during initialization and executes all subsequent allocations entirely within user space.
+
+This removes repeated kernel interaction overhead from the allocation path.
 
 ---
 
-## 🏗️ Core Architecture & Components
+## Deterministic O(1) Allocation Paths
 
-MemForge operates as a **Hybrid, Segmented Core Architecture**. It divides a single pre-allocated memory budget into autonomous regions managed by specialized sub-engines:
+General-purpose allocators must support arbitrary allocation sizes and therefore maintain complex metadata structures.
 
-### 1. Central Memory Manager (`CentralMemoryManager`)
+MemForge instead uses specialized allocation strategies:
 
-The orchestrator of the ecosystem. It takes the global system byte array, partitions it into explicit sequential boundary sectors, and initializes the sub-pools via **placement new**.
+* Embedded free lists
+* Size-segregated bins
+* Arena pointer bumping
 
-* **Range-Based Demultiplexing:** When objects are freed, the manager analyzes the raw numerical value of the pointer. By using $O(1)$ range-bounding comparison operators (`ptr >= base_addr && ptr < boundary`), it deduces which sub-allocator owns the block without utilizing slow hash lookup tables.
-
-### 2. Embedded Free-List Slab Allocator (`SlabAllocator`)
-
-Engineered to handle high-frequency uniform object pooling with **0% external fragmentation**.
-
-* **The Embedded Pointer Trick:** When an object slot is free, its raw unmanaged memory bytes are cast into a structural tracking `Node` storing a pointer to the next free block. Allocating is an $O(1)$ list pop; deleting is an $O(1)$ list push.
-
-### 3. Segregated Free-List (`SegregatedFreeList`)
-
-Handles unpredictable, variable-sized allocation requests.
-
-* **Power-of-Two Binning:** Maintains an array of size-binned linked lists (16B, 32B, 64B, etc.).
-* **Dynamic Splitting & Merging:** If a targeted bin is empty, it traverses upward, pops a larger block, and splits it—serving the application and caching the remainder. During block cleanup, it performs pointer-neighbor checks to coalesce fragments back into unified large-capacity spaces.
-
-### 4. Transient Arena Allocator (`ArenaAllocator`)
-
-The ultimate execution engine for short-lived, frame-based parameters. It drops allocation cycles down to a basic **pointer bump** (2-3 CPU instructions). It forbids individual `free` overhead, clearing millions of data components simultaneously via a single `reset()` call.
+Most allocation and deallocation operations therefore complete in **constant time**.
 
 ---
 
-## 🛠️ Code Layout & Repository Structure
+## Cache-Friendly Memory Reuse
+
+Recently freed blocks remain close together in memory and are quickly recycled.
+
+This improves:
+
+* L1 cache locality
+* L2 cache locality
+* Branch prediction efficiency
+
+while reducing expensive RAM fetches.
+
+---
+
+# 🏗️ Architecture Overview
+
+MemForge follows a **Hybrid Segmented Memory Architecture**.
+
+A single preallocated memory region is divided into dedicated sections managed by specialized allocation engines.
+
+```text
++----------------------------------------------------+
+|              Central Memory Manager                |
++----------------------------------------------------+
+          |             |              |
+          v             v              v
+
+   Slab Allocator   Free List      Arena Allocator
+                     Allocator
+```
+
+---
+
+# 1. Central Memory Manager
+
+`CentralMemoryManager`
+
+The orchestration layer of the entire system.
+
+Responsibilities:
+
+* Owns the global memory buffer
+* Partitions memory into allocator regions
+* Routes allocation requests
+* Routes deallocation requests
+* Maintains telemetry information
+
+## Range-Based Demultiplexing
+
+When a pointer is freed, MemForge determines ownership through direct address comparison:
+
+```cpp
+ptr >= region_start &&
+ptr < region_end
+```
+
+This avoids:
+
+* Hash tables
+* Lookup maps
+* Ownership metadata searches
+
+resulting in O(1) allocator routing.
+
+---
+
+# 2. Embedded Free-List Slab Allocator
+
+`SlabAllocator`
+
+Designed for high-frequency allocation of fixed-size objects.
+
+Examples:
+
+* Entities
+* Components
+* Particles
+* Events
+
+## Embedded Pointer Technique
+
+When a slot becomes free, its memory is reused to store a node:
+
+```cpp
+struct FreeNode
+{
+    FreeNode* next;
+};
+```
+
+Allocation:
+
+```text
+Pop from free list
+```
+
+Deallocation:
+
+```text
+Push into free list
+```
+
+Complexity:
+
+| Operation | Complexity |
+| --------- | ---------- |
+| Allocate  | O(1)       |
+| Free      | O(1)       |
+
+External fragmentation is eliminated.
+
+---
+
+# 3. Segregated Free List Allocator
+
+`SegregatedFreeList`
+
+Handles variable-sized allocations.
+
+## Power-of-Two Binning
+
+Memory blocks are grouped into size classes:
+
+```text
+16 B
+32 B
+64 B
+128 B
+256 B
+512 B
+1024 B
+...
+```
+
+Each size class maintains its own linked list.
+
+---
+
+## Dynamic Block Splitting
+
+When an exact-sized block is unavailable:
+
+1. A larger block is selected.
+2. The block is split.
+3. Requested memory is returned.
+4. Remaining space is reinserted.
+
+---
+
+## Coalescing
+
+When neighboring free blocks are detected:
+
+```text
+Block A + Block B
+        ↓
+Merged Larger Block
+```
+
+This reduces fragmentation over long runtimes.
+
+---
+
+# 4. Arena Allocator
+
+`ArenaAllocator`
+
+Designed for transient allocations with predictable lifetimes.
+
+Examples:
+
+* Frame data
+* Temporary buffers
+* Parsing structures
+* Scratch memory
+
+Allocation consists of a simple pointer increment:
+
+```cpp
+current += size;
+```
+
+No free operation exists.
+
+Entire memory regions are reclaimed instantly using:
+
+```cpp
+arena.reset();
+```
+
+This makes allocation effectively only a few CPU instructions.
+
+---
+
+# 📂 Repository Structure
 
 ```text
 MemForge/
+│
 ├── include/
-│   ├── IAllocator.h              # Base abstract contract and telemetry state hooks
-│   ├── ArenaAllocator.h          # Sequential pointer-bumping allocator
-│   ├── SlabAllocator.h           # Fixed-size object pool with embedded nodes
-│   ├── SegregatedFreeList.h      # Power-of-two binned variable sizing layout
-│   ├── CentralMemoryManager.h    # Boundary traffic controller and master router
-│   └── Telemetry.h               # Leak detection and high-water mark suite
+│   ├── IAllocator.h
+│   ├── ArenaAllocator.h
+│   ├── SlabAllocator.h
+│   ├── SegregatedFreeList.h
+│   ├── CentralMemoryManager.h
+│   └── Telemetry.h
+│
 ├── src/
 │   ├── ArenaAllocator.cpp
 │   ├── SlabAllocator.cpp
 │   ├── SegregatedFreeList.cpp
 │   ├── CentralMemoryManager.cpp
-│   └── main.cpp                  # High-precision hardware chrono-benchmark
+│   └── main.cpp
+│
 └── README.md
-
 ```
 
 ---
 
-## ⚙️ Compilation & Execution
+# ⚙️ Compilation
 
-To compile the entire engine with full pipeline vectorization and code optimization flags (`-O3`), use any modern C++17 compliant compiler:
+Compile using any modern C++17 compiler.
 
 ```bash
-# Compile all source files together into a highly optimized binary
-g++ -O3 -std=c++17 src/main.cpp src/ArenaAllocator.cpp src/SlabAllocator.cpp src/SegregatedFreeList.cpp src/CentralMemoryManager.cpp -o MemForgeEngine
+g++ -O3 -std=c++17 \
+src/main.cpp \
+src/ArenaAllocator.cpp \
+src/SlabAllocator.cpp \
+src/SegregatedFreeList.cpp \
+src/CentralMemoryManager.cpp \
+-o MemForgeEngine
+```
 
-# Run the benchmark suite
+Run:
+
+```bash
 ./MemForgeEngine
-
 ```
 
 ---
 
-## 🧪 Telemetry Verification & Leak Profiling
+# 🧪 Telemetry & Leak Detection
 
-MemForge wraps all internal operations with structural tracking metrics. The profile metrics generated at the end of execution confirm perfect clean closure:
+MemForge continuously tracks:
 
-* **Active Allocations:** `0` (Every allocated tracking address was successfully returned to its core sub-engine).
-* **Peak Memory Use:** Verified at exactly `7,200,000 bytes` ($50,000 \times 144 \text{ bytes}$). This confirms that the bitwise mathematical formula: `(address + (alignment - 1)) & ~(alignment - 1)` packed blocks perfectly with zero alignment padding bloat.
+* Active allocations
+* Current memory usage
+* Peak memory usage
+* Allocation statistics
+
+Expected benchmark output:
+
+```text
+Active Allocations : 0
+STATUS             : Clean. Zero leaks detected.
+```
+
+A value of zero confirms that every allocated block was successfully returned to its originating allocator.
 
 ---
 
-## 💡 Engineering Trade-Offs
+# 📈 Memory Utilization Verification
 
-MemForge is not designed as a general-purpose replacement for the standard OS heap. It trades general allocation flexibility for mechanical execution velocity:
+Peak memory consumption during testing:
 
-* **Why it's specialized:** It enforces a fixed capacity boundary. If the 32MB budget fills up, it terminates safely rather than expanding into virtual system pages. Slabs are configured for discrete sizes; requesting odd block margins can lead to internal padding waste.
-* **Optimal Environments:** High-performance systems where lifetime allocations follow strict mathematical limits, such as particle pipelines in AAA games or deterministic latency windows in algorithmic execution pools.
-
+```text
+7,200,000 bytes
 ```
 
+Derived from:
+
+```text
+50,000 objects × 144 bytes
 ```
+
+Alignment calculations use bitwise rounding:
+
+```cpp
+(address + (alignment - 1)) &
+~(alignment - 1)
+```
+
+ensuring efficient packing while maintaining alignment guarantees.
+
+---
+
+# 💡 Engineering Trade-Offs
+
+MemForge prioritizes deterministic performance over general-purpose flexibility.
+
+## Advantages
+
+* Extremely low allocation latency
+* Predictable runtime behavior
+* O(1) allocation paths
+* Reduced fragmentation
+* Cache-friendly memory reuse
+* Built-in telemetry
+
+## Limitations
+
+* Fixed memory budget
+* No automatic heap expansion
+* Specialized allocation patterns
+* Potential internal fragmentation in slab regions
+
+If the configured memory pool becomes exhausted, MemForge fails safely rather than requesting additional pages from the operating system.
+
+---
+
+# 🎯 Ideal Use Cases
+
+MemForge is best suited for environments where memory requirements are known ahead of time and predictable performance is critical.
+
+Examples include:
+
+* AAA Game Engine Subsystems
+* Entity Component Systems (ECS)
+* High-Frequency Trading Platforms
+* Real-Time Physics Simulations
+* Network Packet Processing
+* Embedded Runtime Systems
+* Performance-Critical Backend Services
+
+---
+
+## License
+
+This project is intended for educational, systems programming, and performance engineering purposes.
